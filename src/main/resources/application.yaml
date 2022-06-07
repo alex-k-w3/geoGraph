@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    graph:
+      url: jdbc:neo4j:bolt://localhost:7687
+      username: neo4j
+      password: Gthbnjybn03
+      driver-class-name: org.neo4j.jdbc.bolt.BoltDriver
+
+    geo:
+      url: jdbc:postgresql://localhost:5432/ukr
+      username: urk
+      password: Zador01
+
+
+  security:
+    user:
+      name: test
+      password: 4J827NfD
+
+  liquibase:
+    change-log: classpath:/graph-db/change.xml

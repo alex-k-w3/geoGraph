@@ -1,0 +1,49 @@
+
+plugins {
+	id 'org.springframework.boot' version '2.6.0'
+	id 'io.spring.dependency-management' version '1.0.11.RELEASE'
+	id 'java'
+}
+
+group = 'oldk.urk'
+version = '0.0.1-SNAPSHOT'
+sourceCompatibility = '11'
+
+repositories {
+	mavenCentral()
+	maven {
+		url = 'https://mvn.topobyte.de'
+	}
+	maven {
+		url = 'https://mvn.slimjars.com'
+	}
+}
+
+dependencies {
+	implementation 'de.topobyte:osm4j-core:1.2.0'
+	implementation 'de.topobyte:osm4j-geometry:1.2.0'
+	implementation 'de.topobyte:osm4j-pbf:1.2.0'
+	implementation 'de.topobyte:osm4j-utils:1.2.0'
+	implementation 'net.postgis:postgis-jdbc:2021.1.0'
+	implementation 'org.springframework.boot:spring-boot-starter-data-neo4j'
+	implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+	implementation 'org.springframework.boot:spring-boot-starter-security'
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.flywaydb:flyway-core'
+	implementation 'org.slf4j:slf4j-api:1.7.25'
+	implementation 'org.slf4j:jcl-over-slf4j:1.7.25'
+	implementation 'org.jgrapht:jgrapht-core:1.5.1'
+	implementation 'io.springfox:springfox-boot-starter:3.0.0'
+	implementation 'org.liquibase.ext:liquibase-neo4j:4.11.0'
+
+	runtimeOnly 'org.neo4j:neo4j-jdbc-driver:4.0.5'
+	implementation "org.liquibase:liquibase-core"
+
+	runtimeOnly 'org.postgresql:postgresql'
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation 'org.springframework.security:spring-security-test'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
