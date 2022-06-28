@@ -50,7 +50,9 @@ public class PlaceBuilder  {
     public OsmPlace build(GeometryBuilder gb, OsmEntityProvider entityProvider) {
         try {
             RegionBuilderResult rbr = gb.getRegionBuilder().build(rel, entityProvider);
-            return new OsmPlace(id, rel, OsmModelUtil.getTagsAsMap(rel), rbr.getMultiPolygon());
+            if (!rbr.getMultiPolygon().isEmpty())
+                return new OsmPlace(id, rel, OsmModelUtil.getTagsAsMap(rel), rbr.getMultiPolygon());
+            return null;
         } catch (EntityNotFoundException e) {
             LOGGER.warn("Can't build object:{}:{}. Some linked entity not found:{}", id, name, e.getMessage());
             return null;

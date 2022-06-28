@@ -9,13 +9,15 @@ import de.topobyte.osm4j.core.resolve.EntityNotFoundException;
 import de.topobyte.osm4j.core.resolve.OsmEntityProvider;
 import de.topobyte.osm4j.geometry.GeometryBuilder;
 import de.topobyte.osm4j.pbf.seq.PbfIterator;
-import oldk.urk.geograph.meta.Types;
+import me.tongfei.progressbar.ProgressBar;
+import oldk.urk.geograph.meta.MetaTypes;
 import oldk.urk.geograph.osm.*;
 import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.TopologyException;
+import org.locationtech.jts.index.quadtree.Quadtree;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.util.Pair;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
 import java.io.IOException;
@@ -58,7 +60,7 @@ public class ImportCommandExecutor {
 
             saveToGeo(places);
             wireFromGeo(graph);
-            saveToGraph(graph);
+            saveToGraphDB(graph);
             LOGGER.info("Items collected: {}", places.size());
 
         } catch (IOException x) {
@@ -71,15 +73,45 @@ public class ImportCommandExecutor {
     private void wireFromGeo(OSMGraph graph) throws SQLException {
         LOGGER.info("Connecting graph nodes with no relations in OSM...");
         var rootNodes = graph.rootsOfTrees();
-        rootNodes.forEach(id -> linkToContainer(graph, id));
+        try(ProgressBar pb = new ProgressBar("Connecting nodes", rootNodes.size())) {
+            Quadtree tree = new Quadtree();
+            for(var n : graph.getNodes()) {
+                if (n instanceof OsmPlace) {
+                    OsmPlace pl = (OsmPlace) n;
+                    tree.insert(pl.getGeometry().getEnvelopeInternal(), n.getId());
+                }
+            }
+            rootNodes.forEach(id -> {
+                        linkToContainer(graph, tree ,id);
+                        pb.step();
+                    });
+        }
         LOGGER.info("Graph after connecting by geometry. Nodes:{} Edges:{}. Connected components: {}", graph.nodesCount(), graph.edgesCount(), graph.connectedComponentsCount());
     }
 
-    private void linkToContainer(OSMGraph graph, Long id) {
+    private void linkToContainer(OSMGraph graph, Quadtree rects, Long id) {
         OSMNode n = graph.getNode(id);
         if (n instanceof OsmPlace) {
             OsmPlace place = (OsmPlace) n;
             final Geometry placeGeo = place.getGeometry();
+
+            List<Long> ids = rects.query(placeGeo.getEnvelopeInternal());
+            if (ids!=null) {
+                var ownerFound = ids.stream()
+                        .filter(i -> !Objects.equals(i, id))
+                        .map(graph::getNode)
+                        .filter(nd -> nd instanceof OsmPlace)
+                        .map(i -> (OsmPlace) i)
+                        .filter(i -> i.getGeometry().isValid())
+                        .filter(i -> checkContains(placeGeo, i))
+                        .sorted(Comparator.comparingDouble(i->i.getGeometry().getArea()))
+                        .map(i -> graph.addRelation(i, place, MetaTypes.REL_CONTAINS))
+                        .findFirst()
+                        .orElse(false);
+                if (!ownerFound)
+                    LOGGER.warn("Owner of OSM entity is not found: {} osm id: {}", place.getName(), id);
+            }
+            /*
             var ownerFound = graph.getNodes().stream()
                     .filter(i -> i instanceof OsmPlace)
                     .filter(i -> i.getId() != id)
@@ -87,34 +119,52 @@ public class ImportCommandExecutor {
                     .filter(i -> i.getGeometry().isValid())
                     .filter(i -> i.getGeometry().contains(placeGeo))
                     .sorted(Comparator.comparingDouble(i->i.getGeometry().getArea()))
-                    .map(i -> graph.addRelation(i, place, Types.REL_CONTAINS))
+                    .map(i -> graph.addRelation(i, place, MetaTypes.REL_CONTAINS))
                     .findFirst()
                     .orElse(false);
-            if (!ownerFound)
-                LOGGER.warn("Owner of OSM entity is not found: {} osm id: {}", place.getName(), id);
+             */
         }
     }
 
-    private void saveToGraph(OSMGraph graph) throws SQLException {
+    private boolean checkContains(Geometry placeGeo, OsmPlace i) {
+        try {
+            return i.getGeometry().contains(placeGeo);
+        } catch (TopologyException x) {
+            LOGGER.warn("Problem with geometry:{} details:{}" , i, x.getMessage());
+        }
+        return false;
+    }
+
+    private void saveToGraphDB(OSMGraph graph) throws SQLException {
         LOGGER.info("Saving Graph info...");
         Connection conn = graphDs.getConnection();
         conn.setAutoCommit(false);
-        try(PreparedStatement stmNodes = conn.prepareStatement("CREATE (n:Ent:Place ?)")) {
-            graph.getNodes().forEach(n -> saveGraphNode(n, conn, stmNodes));
+        try(PreparedStatement stmNodes = conn.prepareStatement("CREATE (n:Ent:Place ?)");
+            ProgressBar pb = new ProgressBar("Saving graph nodes", graph.nodesCount())) {
+            graph.getNodes().forEach(n -> {
+                saveGraphNode(n, conn, stmNodes);
+                pb.step();
+            });
         }
 
         var edgesByType = graph.getEdges().stream()
                 .collect(Collectors.groupingBy(Relation::getType));
-        for(var kv : edgesByType.entrySet()) {
-            try(PreparedStatement stmRels = conn.prepareStatement(String.format("MATCH\n" +
-                    "  (a:Place),\n" +
-                    "  (b:Place)\n" +
-                    "WHERE a.uid = ? AND b.uid = ?\n" +
-                    "CREATE (a)-[r:%s { src: \"osm\" }]->(b)", kv.getKey()))) {
+        try(ProgressBar pb = new ProgressBar("Saving graph relations", graph.edgesCount())) {
+            for (var kv : edgesByType.entrySet()) {
+                try (PreparedStatement stmRels = conn.prepareStatement(String.format("MATCH\n" +
+                        "  (a:Place),\n" +
+                        "  (b:Place)\n" +
+                        "WHERE a.uid = ? AND b.uid = ?\n" +
+                        "MERGE (a)-[r:%s]->(b)" +
+                        "ON CREATE SET r.uid=?, r.src=\"osm\"", kv.getKey()))) {
 
-                kv.getValue().forEach(r -> saveRelation(graph, r, conn, stmRels));
+                    kv.getValue().forEach(r -> {
+                        saveRelation(graph, r, conn, stmRels);
+                        pb.step();
+                    });
+                }
+
             }
-
         }
     }
 
@@ -124,6 +174,7 @@ public class ImportCommandExecutor {
             UUID uidTo = graph.getNode(r.getTo()).getUuid();
             stmRels.setString(1, uidFrom.toString());
             stmRels.setString(2, uidTo.toString());
+            stmRels.setString(3, r.getUid().toString());
             stmRels.execute();
             conn.commit();
         } catch (SQLException x) {
@@ -142,17 +193,21 @@ public class ImportCommandExecutor {
         }
     }
 
-    final static Map<String, String> OSM_TO_GRAPH_PROPS = Map.of(
-            "name:en", "name_en",
-            "name:uk", "name_uk",
-            "name:ru", "name_ru",
-            "place", "osm_place",
-            "amenity", "osm_amenity",
-            "boundary", "osm_boundary",
-            "admin_level", "osm_admin_level",
-            "border_type", "osm_border_type",
-            "start_date", "osm_start_date",
-            "military", "osm_military"
+    final static Map<String, String> OSM_TO_GRAPH_PROPS = new HashMap<>();
+    static {
+        OSM_TO_GRAPH_PROPS.put("name:en",       "name_en"       );
+        OSM_TO_GRAPH_PROPS.put("name:uk",       "name_uk"       );
+        OSM_TO_GRAPH_PROPS.put("name:ru",       "name_ru"       );
+        OSM_TO_GRAPH_PROPS.put("place",         "osm_place"     );
+        OSM_TO_GRAPH_PROPS.put("amenity",       "osm_amenity"   );
+        OSM_TO_GRAPH_PROPS.put("boundary",      "osm_boundary"  );
+        OSM_TO_GRAPH_PROPS.put("admin_level",   "osm_admin_level");
+        OSM_TO_GRAPH_PROPS.put("border_type",   "osm_border_type");
+        OSM_TO_GRAPH_PROPS.put("start_date",    "osm_start_date");
+        OSM_TO_GRAPH_PROPS.put("military",      "osm_military");
+        OSM_TO_GRAPH_PROPS.put("name:prefix",   "osm_name_prefix");
+        OSM_TO_GRAPH_PROPS.put("population",    "osm_population");
+    }
 /*
             "aeroway", "osm_aeroway",
             "barrier", "osm_barrier",
@@ -191,7 +246,6 @@ public class ImportCommandExecutor {
             "end_date",
             "traffic_sign"
 */
-    );
 
     private Map<String, Object> getNodeProps(OSMNode n) {
         var rv = new HashMap<String, Object>();
@@ -214,7 +268,12 @@ public class ImportCommandExecutor {
         PreparedStatement stmObjects = conn.prepareStatement("INSERT INTO geo_objects(uid, object_type, osm_id) values (?, ?, ?)");
         PreparedStatement stmRegs = conn.prepareStatement("INSERT INTO geo_regions(uid, region) VALUES(?, ST_GeomFromEWKT(?))");
         PreparedStatement stmCheck = conn.prepareStatement("SELECT uid FROM geo_objects WHERE osm_id=?");
-        places.forEach(p -> insertPlace(p, conn, stmObjects, stmRegs, stmCheck));
+        try(ProgressBar pb = new ProgressBar("Saving geometry database items", places.size())) {
+            places.forEach(p -> {
+                insertPlace(p, conn, stmObjects, stmRegs, stmCheck);
+                pb.step();
+            });
+        }
     }
 
     private void insertPlace(OsmPlace p, Connection conn, PreparedStatement stmObjects, PreparedStatement stmRegs, PreparedStatement stmCheck) {
@@ -227,7 +286,7 @@ public class ImportCommandExecutor {
               LOGGER.warn("Place already exists:{}", p.getName());
             } else {
                 stmObjects.setObject(1, p.getUuid());
-                stmObjects.setString(2, Types.NOD_PLACE);
+                stmObjects.setString(2, MetaTypes.NOD_PLACE);
                 stmObjects.setLong(3, p.getId());
                 stmObjects.execute();
                 stmRegs.setObject(1, p.getUuid());
@@ -242,8 +301,11 @@ public class ImportCommandExecutor {
     }
 
     private OSMGraph buildGraph(List<OsmPlace> places) {
+        LOGGER.info("Building graph...");
         Map<Long, OSMNode> nodesById = places.stream().collect(Collectors.toMap(OSMNode::getId, Function.identity()));
-        return OSMGraph.fromNodesMap(nodesById, n -> linksOfNode(n, nodesById));
+        var rv = OSMGraph.fromNodesMap(nodesById, n -> linksOfNode(n, nodesById));
+        LOGGER.info("Building graph DONE. Nodes: {} relations {}", rv.nodesCount(), rv.edgesCount());
+        return rv;
     }
 
     private Set<Pair<Long, String>> linksOfNode(OSMNode n, Map<Long, OSMNode> nodesById) {
@@ -253,7 +315,7 @@ public class ImportCommandExecutor {
             if("subarea".equals(rel.getRole())) {
                 OSMNode relNode = nodesById.get(rel.getId());
                 if (relNode!=null) {
-                    links.add(Pair.of(relNode.getId(), Types.REL_CONTAINS));
+                    links.add(Pair.of(relNode.getId(), MetaTypes.REL_CONTAINS));
                 }
             }
         }
@@ -261,11 +323,13 @@ public class ImportCommandExecutor {
     }
 
     private List<OsmPlace> buildPlaces(Map<Long, PlaceBuilder> rootObjects) {
+        LOGGER.info("Building geometry...");
         GeometryBuilder gb = new GeometryBuilder();
         List<OsmPlace> places = rootObjects.values().stream()
                 .map(b -> b.build(gb, new Resolver(rootObjects)))
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
+        LOGGER.info("Building geometry DONE. Places: " + places.size());
         return places;
     }
 
@@ -273,13 +337,19 @@ public class ImportCommandExecutor {
         Map<Long, PlaceBuilder> rootObjects = new HashMap<>();
         int iterCounter = 0;
         IterationRequiremets prevReqs = IterationRequiremets.empty();
+        long maxItems = -1;
+        long items = 0;
         do {
             LOGGER.info("Iteration #{} started", iterCounter + 1);
-            IterationRequiremets newReqs = IterationRequiremets.empty();
-            try(InputStream pstr = Files.newInputStream(Paths.get(fileName))) {
-                OsmIterator iterator = new PbfIterator(pstr, false);
-                for (var object : iterator) {
-                    OsmEntity ent = object.getEntity();
+            try(ProgressBar pb = new ProgressBar("Loading...Iteration #" + (iterCounter+1), maxItems)) {
+
+                IterationRequiremets newReqs = IterationRequiremets.empty();
+                try (InputStream pstr = Files.newInputStream(Paths.get(fileName))) {
+                    OsmIterator iterator = new PbfIterator(pstr, false);
+                    for (var object : iterator) {
+                        OsmEntity ent = object.getEntity();
+                        pb.step();
+
 /*
                     if (ent instanceof OsmRelation) {
                         OsmRelation rrr = (OsmRelation) ent;
@@ -290,21 +360,25 @@ public class ImportCommandExecutor {
                     }
 
  */
-                    newReqs.add(prevReqs.handle(ent));
-                    var tags = OsmModelUtil.getTagsAsMap(ent);
-                    if (isAcceptable(ent, tags)) {
-                        if (!rootObjects.containsKey(ent.getId())) {
-                            PlaceBuilder placeBuilder = new PlaceBuilder(ent.getId(), (OsmRelation) ent);
-                            rootObjects.put(ent.getId(), placeBuilder);
-                            NodeRequirements req = placeBuilder.getRequirements(this::entityAdded);
-                            newReqs.add(req);
+                        newReqs.add(prevReqs.handle(ent));
+                        var tags = OsmModelUtil.getTagsAsMap(ent);
+                        if (isAcceptable(ent, tags)) {
+                            if (!rootObjects.containsKey(ent.getId())) {
+                                PlaceBuilder placeBuilder = new PlaceBuilder(ent.getId(), (OsmRelation) ent);
+                                rootObjects.put(ent.getId(), placeBuilder);
+                                NodeRequirements req = placeBuilder.getRequirements(this::entityAdded);
+                                newReqs.add(req);
+                            }
                         }
+                    items++;
                     }
-
                 }
+                LOGGER.info("Iteration #{} done. Required {}", iterCounter + 1, prevReqs.size());
+                prevReqs = newReqs;
+                maxItems = items;
+                items = 0;
             }
-            LOGGER.info("Iteration #{} done. Required {}", iterCounter + 1, prevReqs.size());
-            prevReqs = newReqs;
+            iterCounter++;
         } while (!prevReqs.isEmpty());
         return rootObjects;
     }

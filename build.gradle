@@ -35,6 +35,7 @@ dependencies {
 	implementation 'org.jgrapht:jgrapht-core:1.5.1'
 	implementation 'io.springfox:springfox-boot-starter:3.0.0'
 	implementation 'org.liquibase.ext:liquibase-neo4j:4.11.0'
+	implementation 'me.tongfei:progressbar:0.9.3'
 
 	runtimeOnly 'org.neo4j:neo4j-jdbc-driver:4.0.5'
 	implementation "org.liquibase:liquibase-core"
