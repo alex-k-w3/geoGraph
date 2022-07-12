@@ -8,6 +8,8 @@ import java.util.Map;
 
 public class OsmPlace extends OSMNode {
     public final MultiPolygon geometry;
+    private Double area = null;
+    private Boolean geoIsValid = null;
 
 
     public OsmPlace(long id, OsmEntity entity, @Nullable Map<String, String> tags, MultiPolygon geometry) {
@@ -17,5 +19,17 @@ public class OsmPlace extends OSMNode {
 
     public MultiPolygon getGeometry() {
         return geometry;
+    }
+
+    public double getArea() {
+        if (area == null)
+            area = geometry.getArea();
+        return area;
+    }
+
+    public boolean isValidGeometry() {
+        if (geoIsValid == null)
+            geoIsValid = geometry.isValid();
+        return geoIsValid;
     }
 }

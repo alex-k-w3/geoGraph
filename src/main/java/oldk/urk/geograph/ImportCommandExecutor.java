@@ -72,6 +72,7 @@ public class ImportCommandExecutor {
 
     private void wireFromGeo(OSMGraph graph) throws SQLException {
         LOGGER.info("Connecting graph nodes with no relations in OSM...");
+        var start = System.currentTimeMillis();
         var rootNodes = graph.rootsOfTrees();
         try(ProgressBar pb = new ProgressBar("Connecting nodes", rootNodes.size())) {
             Quadtree tree = new Quadtree();
@@ -86,7 +87,9 @@ public class ImportCommandExecutor {
                         pb.step();
                     });
         }
-        LOGGER.info("Graph after connecting by geometry. Nodes:{} Edges:{}. Connected components: {}", graph.nodesCount(), graph.edgesCount(), graph.connectedComponentsCount());
+        var duration = System.currentTimeMillis() - start;
+        LOGGER.info("Graph after connecting by geometry in {} [ms]. Nodes:{} Edges:{}. Connected components: {}",
+                duration, graph.nodesCount(), graph.edgesCount(), graph.connectedComponentsCount());
     }
 
     private void linkToContainer(OSMGraph graph, Quadtree rects, Long id) {
@@ -102,11 +105,10 @@ public class ImportCommandExecutor {
                         .map(graph::getNode)
                         .filter(nd -> nd instanceof OsmPlace)
                         .map(i -> (OsmPlace) i)
-                        .filter(i -> i.getGeometry().isValid())
+                        .filter(OsmPlace::isValidGeometry)
                         .filter(i -> checkContains(placeGeo, i))
-                        .sorted(Comparator.comparingDouble(i->i.getGeometry().getArea()))
+                        .min(Comparator.comparingDouble(OsmPlace::getArea))
                         .map(i -> graph.addRelation(i, place, MetaTypes.REL_CONTAINS))
-                        .findFirst()
                         .orElse(false);
                 if (!ownerFound)
                     LOGGER.warn("Owner of OSM entity is not found: {} osm id: {}", place.getName(), id);
@@ -128,7 +130,7 @@ public class ImportCommandExecutor {
 
     private boolean checkContains(Geometry placeGeo, OsmPlace i) {
         try {
-            return i.getGeometry().contains(placeGeo);
+            return i.getGeometry().covers(placeGeo);
         } catch (TopologyException x) {
             LOGGER.warn("Problem with geometry:{} details:{}" , i, x.getMessage());
         }
