@@ -28,6 +28,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -158,7 +159,7 @@ public class ImportCommandExecutor {
                         "  (b:Place)\n" +
                         "WHERE a.uid = ? AND b.uid = ?\n" +
                         "MERGE (a)-[r:%s]->(b)" +
-                        "ON CREATE SET r.uid=?, r.src=\"osm\"", kv.getKey()))) {
+                        "ON CREATE SET r.uid=?, r.src=\"osm\", r.created=?", kv.getKey()))) {
 
                     kv.getValue().forEach(r -> {
                         saveRelation(graph, r, conn, stmRels);
@@ -177,6 +178,7 @@ public class ImportCommandExecutor {
             stmRels.setString(1, uidFrom.toString());
             stmRels.setString(2, uidTo.toString());
             stmRels.setString(3, r.getUid().toString());
+            stmRels.setTimestamp(4, java.sql.Timestamp.valueOf(LocalDateTime.now()));
             stmRels.execute();
             conn.commit();
         } catch (SQLException x) {
@@ -195,6 +197,7 @@ public class ImportCommandExecutor {
         }
     }
 
+    final static Set<String> OSM_PROP_TO_INT = new HashSet<>();
     final static Map<String, String> OSM_TO_GRAPH_PROPS = new HashMap<>();
     static {
         OSM_TO_GRAPH_PROPS.put("name:en",       "name_en"       );
@@ -209,6 +212,9 @@ public class ImportCommandExecutor {
         OSM_TO_GRAPH_PROPS.put("military",      "osm_military");
         OSM_TO_GRAPH_PROPS.put("name:prefix",   "osm_name_prefix");
         OSM_TO_GRAPH_PROPS.put("population",    "osm_population");
+        OSM_PROP_TO_INT.add("admin_level");
+        OSM_PROP_TO_INT.add("population");
+
     }
 /*
             "aeroway", "osm_aeroway",
@@ -254,13 +260,28 @@ public class ImportCommandExecutor {
         rv.put("uid", n.getUuid().toString());
         rv.put("src", "osm");
         rv.put("name", n.getName());
+        rv.put("created", LocalDateTime.now());
         var tags = n.getTags();
         if (tags!=null) {
             tags.entrySet().stream()
                     .filter(kv -> OSM_TO_GRAPH_PROPS.containsKey(kv.getKey()))
-                    .forEach(kv -> rv.put(OSM_TO_GRAPH_PROPS.get(kv.getKey()), kv.getValue()));
+                    .forEach(kv -> rv.put(OSM_TO_GRAPH_PROPS.get(kv.getKey()), convertType(kv.getKey(), kv.getValue())));
         }
         return rv;
+    }
+
+    private Object convertType(String key, String value) {
+        if (OSM_PROP_TO_INT.contains(key))
+            return toIntType(value);
+        return value;
+    }
+
+    private Object toIntType(String value) {
+        try {
+            return Integer.parseInt(value);
+        } catch (Exception x) {
+            return null;
+        }
     }
 
     private void saveToGeo(List<OsmPlace> places) throws SQLException {

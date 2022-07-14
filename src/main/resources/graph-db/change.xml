@@ -7,5 +7,13 @@
     <changeSet id="initial" author="alex-k">
         <comment>Create initial structs</comment>
         <neo4j:cypher>CREATE CONSTRAINT node_uid  IF NOT EXISTS FOR (n:Ent) REQUIRE (n.uid) IS UNIQUE</neo4j:cypher>
+        <neo4j:cypher>CREATE LOOKUP INDEX node_label_lookup_index IF NOT EXISTS FOR (n) ON EACH labels(n)</neo4j:cypher>
+        <neo4j:cypher>CREATE LOOKUP INDEX rel_type_lookup_index IF NOT EXISTS FOR ()-[r]-() ON EACH type(r)</neo4j:cypher>
+        <neo4j:cypher>CREATE INDEX node_created  IF NOT EXISTS FOR (n:Ent) ON n.created</neo4j:cypher>
+        <neo4j:cypher>CREATE INDEX node_name  IF NOT EXISTS FOR (n:Ent) ON n.name</neo4j:cypher>
+        <neo4j:cypher>CREATE INDEX node_name_ru IF NOT EXISTS FOR (n:Place) ON n.name_ru</neo4j:cypher>
+        <neo4j:cypher>CREATE INDEX node_name_en IF NOT EXISTS FOR (n:Place) ON n.name_en</neo4j:cypher>
+        <neo4j:cypher>CREATE INDEX node_name_uk IF NOT EXISTS FOR (n:Place) ON n.name_uk</neo4j:cypher>
+        <neo4j:cypher>CREATE INDEX rel_created IF NOT EXISTS FOR ()-[r:RELATED]-() ON r.created</neo4j:cypher>
     </changeSet>
 </databaseChangeLog>
