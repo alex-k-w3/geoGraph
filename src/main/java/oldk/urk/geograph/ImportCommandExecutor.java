@@ -288,18 +288,17 @@ public class ImportCommandExecutor {
         LOGGER.info("Saving Geo info...");
         Connection conn = geoDs.getConnection();
         conn.setAutoCommit(false);
-        PreparedStatement stmObjects = conn.prepareStatement("INSERT INTO geo_objects(uid, object_type, osm_id) values (?, ?, ?)");
-        PreparedStatement stmRegs = conn.prepareStatement("INSERT INTO geo_regions(uid, region) VALUES(?, ST_GeomFromEWKT(?))");
-        PreparedStatement stmCheck = conn.prepareStatement("SELECT uid FROM geo_objects WHERE osm_id=?");
+        PreparedStatement stmRegs = conn.prepareStatement("INSERT INTO geo_regions(uid, osm_id, region) VALUES(?, ?, ST_GeomFromEWKT(?))");
+        PreparedStatement stmCheck = conn.prepareStatement("SELECT uid FROM geo_regions WHERE osm_id=?");
         try(ProgressBar pb = new ProgressBar("Saving geometry database items", places.size())) {
             places.forEach(p -> {
-                insertPlace(p, conn, stmObjects, stmRegs, stmCheck);
+                insertPlace(p, conn,  stmRegs, stmCheck);
                 pb.step();
             });
         }
     }
 
-    private void insertPlace(OsmPlace p, Connection conn, PreparedStatement stmObjects, PreparedStatement stmRegs, PreparedStatement stmCheck) {
+    private void insertPlace(OsmPlace p, Connection conn, PreparedStatement stmRegs, PreparedStatement stmCheck) {
         try {
             stmCheck.setLong(1, p.getId());
             ResultSet rs = stmCheck.executeQuery();
@@ -308,12 +307,9 @@ public class ImportCommandExecutor {
               p.setUuid(existingUID);
               LOGGER.warn("Place already exists:{}", p.getName());
             } else {
-                stmObjects.setObject(1, p.getUuid());
-                stmObjects.setString(2, MetaTypes.NOD_PLACE);
-                stmObjects.setLong(3, p.getId());
-                stmObjects.execute();
                 stmRegs.setObject(1, p.getUuid());
-                stmRegs.setString(2, p.geometry.toText());
+                stmRegs.setLong(2, p.getId());
+                stmRegs.setString(3, p.geometry.toText());
                 stmRegs.execute();
                 conn.commit();
             }
